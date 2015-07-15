@@ -8,13 +8,16 @@
 
 #import "XDSCameraViewController.h"
 
-@interface XDSCameraViewController ()<AVCaptureVideoDataOutputSampleBufferDelegate>
+@interface XDSCameraViewController ()<AVCaptureVideoDataOutputSampleBufferDelegate>{
+    BOOL _canRecognize;
+}
 @property (strong, nonatomic)AVCaptureSession *session;
 @property (strong, nonatomic)AVCaptureVideoPreviewLayer * previewLayer;
+@property (strong, nonatomic)G8Tesseract * tesseract;
 @property (strong, nonatomic)UIImage * scanImage;
 @property (weak, nonatomic) IBOutlet UIView *scanView;
-@property (weak, nonatomic) IBOutlet UIImageView *scanImageView;
-@property (weak, nonatomic) IBOutlet UIImageView *scanResultImageView;
+@property (weak, nonatomic) IBOutlet UILabel *scanResultLabel;
+
 
 @end
 
@@ -22,11 +25,16 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    [self performSelector:@selector(setupCaptureSession) withObject:nil afterDelay:2];
-//    [self setupCaptureSession];
+    [self setupCaptureSession];
+    [self setupTesseract];
 }
-
-
+- (void)setupTesseract{
+    self.tesseract = [[G8Tesseract alloc]init];
+    self.tesseract.language = @"eng";
+    self.tesseract.engineMode = G8OCREngineModeTesseractCubeCombined;
+    self.tesseract.pageSegmentationMode = G8PageSegmentationModeAuto;
+    self.tesseract.maximumRecognitionTime = 60.0;
+}
 // Create and configure a capture session and start it running
 - (void)setupCaptureSession {
     NSError *error = nil;
@@ -68,22 +76,32 @@
 // Delegate routine that is called when a sample buffer was written
 - (void)captureOutput:(AVCaptureOutput *)captureOutput didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer fromConnection:(AVCaptureConnection *)connection {
     // Create a UIImage from the sample buffer data
-    if (!self.scanImage) {
-//        UIImage *image = [self imageFromSampleBuffer:sampleBuffer];
-//        self.scanImage = image;
-        self.scanImage = [UIImage imageNamed:@"available.jpg"];
-        [self performImageRecognition:self.scanImage];
+    if (!_canRecognize) {
+        @autoreleasepool {
+            // perform memory intensive task here;
+            UIImage *image = [self imageFromSampleBuffer:sampleBuffer];
+            CGFloat ratio_x = image.size.width/self.view.frame.size.height;
+            CGFloat ratio_y = image.size.height/self.view.frame.size.width;
+            CGRect frame = self.scanView.frame;
+            CGRect scanImageFrame = CGRectZero;
+            frame.origin.x = self.view.frame.size.width/2-100;
+            frame.origin.y = 150;
+            scanImageFrame.origin.x = frame.origin.y * ratio_x;
+            scanImageFrame.origin.y = frame.origin.x * ratio_y;
+            scanImageFrame.size.width = frame.size.height * ratio_x;
+            scanImageFrame.size.height = frame.size.width * ratio_x;
+            UIImage * scanImage=[UIImage imageWithCGImage:CGImageCreateWithImageInRect([image CGImage], scanImageFrame) scale:1 orientation:UIImageOrientationRight];
+            dispatch_sync(dispatch_get_main_queue(), ^{
 
-//        dispatch_sync(dispatch_get_main_queue(), ^{
-//            UIImage *image = [self imageFromSampleBuffer:sampleBuffer];
-//            image = [UIImage imageWithCGImage:image.CGImage scale:.1 orientation:UIImageOrientationRight];
-//            NSLog(@"image = %@", NSStringFromCGSize(image.size));
-//            self.scanImage = [UIImage imageWithCGImage:CGImageCreateWithImageInRect(image.CGImage, self.scanView.frame)];
-//            self.scanResultImageView.image = self.scanImage;
-//            NSLog(@"smallImage = %@ = %@", NSStringFromCGSize(self.scanImage.size), self.scanImage);
-//            self.scanImageView.image = image;
-//            [self performImageRecognition:self.scanImage];
-//        });
+            });
+            _canRecognize = YES;
+            [self performImageRecognition:[self scaleImage:scanImage maxDimension:640]];
+        }
+
+
+//        self.scanImage = [UIImage imageNamed:@"available.jpg"];
+//        [self performImageRecognition:[self scaleImage:image maxDimension:640]];
+
     }
 }
 
@@ -115,24 +133,26 @@
     UIImage *image = [UIImage imageWithCGImage:quartzImage];
     // Release the Quartz image
     CGImageRelease(quartzImage);
-    return (image);
+
+    imageBuffer = nil;
+    baseAddress = nil;
+    context = nil;
+    colorSpace = nil;
+    quartzImage = nil;
+    return image;
 }
 
 
 - (void)performImageRecognition:(UIImage *)image{
-    G8Tesseract * tesseract = [[G8Tesseract alloc]init];
-    tesseract.language = @"eng";
-    tesseract.engineMode = G8OCREngineModeTesseractCubeCombined;
-    tesseract.pageSegmentationMode = G8PageSegmentationModeAuto;
-    tesseract.maximumRecognitionTime = 60.0;
-    tesseract.image = [image g8_blackAndWhite];
-    if ([tesseract recognize]) {
-        self.scanImage = nil;
-        
-        NSLog(@"result = %@", tesseract.recognizedText);
-    }else{
-        self.scanImage = nil;
-        NSLog(@"recognize failed!");
+    self.tesseract.image = [image g8_blackAndWhite];
+    if ([self.tesseract recognize]) {
+        _canRecognize = NO;
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            self.scanResultLabel.text = self.tesseract.recognizedText;
+        });
+        sleep(1);
+        NSLog(@"result = %@", self.tesseract.recognizedText);
+//        [G8Tesseract clearCache];
     }
 }
 
